@@ -1,7 +1,7 @@
 import os
 import asyncio
-import subprocess
 import uuid
+import subprocess
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -17,13 +17,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🚀 FastMedia Bot aktif.\nKirim link video.")
 
 
-async def enqueue(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
     await update.message.reply_text("Link diterima. Masuk antrian.")
     await queue.put((update, url))
 
 
 async def worker():
+
     while True:
 
         update, url = await queue.get()
@@ -53,22 +54,22 @@ async def worker():
                 url,
             ]
 
-            subprocess.run(cmd)
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
             if not os.path.exists(filepath):
                 await msg.edit_text("Download gagal.")
                 queue.task_done()
                 continue
 
-            await msg.edit_text("Upload...")
+            await msg.edit_text("Upload video...")
 
-            with open(filepath, "rb") as video:
-                await update.message.reply_video(video)
+            with open(filepath, "rb") as f:
+                await update.message.reply_video(f)
 
             await msg.delete()
 
         except Exception:
-            await update.message.reply_text("Terjadi error.")
+            await update.message.reply_text("Terjadi error saat proses.")
 
         finally:
             if os.path.exists(filepath):
@@ -77,16 +78,16 @@ async def worker():
         queue.task_done()
 
 
-async def start_worker(app):
+async def on_startup(app):
     asyncio.create_task(worker())
 
 
 def main():
 
-    app = ApplicationBuilder().token(TOKEN).post_init(start_worker).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(on_startup).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enqueue))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
     print("FastMedia Bot running...")
 
@@ -94,13 +95,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()def main():
-
-    app = ApplicationBuilder().token(TOKEN).post_init(start_worker).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enqueue))
-
+    main()
     print("FastMedia Bot running...")
 
     app.run_polling()
