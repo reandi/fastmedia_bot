@@ -1,106 +1,132 @@
 import os
-import yt_dlp
 import asyncio
 import subprocess
+import uuid
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
 TOKEN = os.getenv("BOT_TOKEN")
 
 DOWNLOAD_DIR = "downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR)
+
+queue = asyncio.Queue()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🚀 FastMedia Bot aktif!\n\n"
-        "Kirim link YouTube / TikTok / Instagram untuk download."
+        "Kirim link YouTube / TikTok / Instagram."
     )
 
 
-def compress_video(input_file, output_file):
-    cmd = [
-        "ffmpeg",
-        "-i", input_file,
-        "-vcodec", "libx264",
-        "-crf", "28",
-        "-preset", "fast",
-        "-acodec", "aac",
-        "-b:a", "128k",
-        output_file
-    ]
-    subprocess.run(cmd)
-
-
-def download_media(url):
-
-    ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "outtmpl": f"{DOWNLOAD_DIR}/%(title)s.%(ext)s",
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "noplaylist": True,
-        "nocheckcertificate": True,
-        "ignoreerrors": True,
-        "geo_bypass": True,
-        "geo_bypass_country": "US",
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0"
-        },
-        "retries": 3,
-        "fragment_retries": 3
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-
-        if not filename.endswith(".mp4"):
-            filename = filename.rsplit(".", 1)[0] + ".mp4"
-
-    return filename
-
-
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
+async def enqueue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
 
-    msg = await update.message.reply_text("⏳ Memulai download...")
+    await update.message.reply_text("📥 Link diterima. Masuk antrian download...")
 
-    try:
-        file_path = await asyncio.to_thread(download_media, url)
+    await queue.put((update, context, url))
 
-        size = os.path.getsize(file_path) / (1024 * 1024)
 
-        # jika file terlalu besar untuk Telegram
-        if size > 45:
+async def worker():
 
-            await msg.edit_text("📦 Mengompres video agar bisa dikirim...")
+    while True:
 
-            compressed = file_path.replace(".mp4", "_compressed.mp4")
+        update, context, url = await queue.get()
 
-            await asyncio.to_thread(compress_video, file_path, compressed)
+        msg = await update.message.reply_text("⏳ Memulai download...")
 
-            file_path = compressed
+        file_id = str(uuid.uuid4())
 
-        await msg.edit_text("📤 Mengirim video...")
+        filepath = f"{DOWNLOAD_DIR}/{file_id}.mp4"
 
-        with open(file_path, "rb") as video:
-            await update.message.reply_video(video)
+        try:
 
-        os.remove(file_path)
+            await msg.edit_text("⬇️ Download video...")
 
-    except Exception as e:
-        await msg.edit_text(f"❌ Gagal: {e}")
+            cmd = [
+                "yt-dlp",
+                "-f",
+                "bestvideo+bestaudio/best",
+                "--merge-output-format",
+                "mp4",
+                "-o",
+                filepath,
+                url
+            ]
+
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            if not os.path.exists(filepath):
+                await msg.edit_text("❌ Download gagal.")
+                queue.task_done()
+                continue
+
+            await msg.edit_text("⚙️ Compress video...")
+
+            compressed = f"{DOWNLOAD_DIR}/{file_id}_c.mp4"
+
+            compress_cmd = [
+                "ffmpeg",
+                "-i",
+                filepath,
+                "-vcodec",
+                "libx264",
+                "-crf",
+                "28",
+                "-preset",
+                "fast",
+                compressed
+            ]
+
+            subprocess.run(compress_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            if os.path.exists(compressed):
+                filepath = compressed
+
+            size = os.path.getsize(filepath) / (1024 * 1024)
+
+            await msg.edit_text(f"📤 Uploading ({size:.1f} MB)...")
+
+            await update.message.reply_video(video=open(filepath, "rb"))
+
+            await msg.delete()
+
+        except Exception as e:
+
+            await update.message.reply_text("❌ Error saat memproses.")
+
+        finally:
+
+            try:
+                os.remove(filepath)
+            except:
+                pass
+
+        queue.task_done()
+
+
+async def start_worker(app):
+
+    asyncio.create_task(worker())
 
 
 def main():
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(start_worker).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enqueue))
 
+    print("FastMedia Bot running...")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
     print("FastMedia Bot running...")
 
     app.run_polling()
