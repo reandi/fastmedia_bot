@@ -3,14 +3,12 @@ import yt_dlp
 import asyncio
 import subprocess
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
 
 DOWNLOAD_DIR = "downloads"
-
-if not os.path.exists(DOWNLOAD_DIR):
-    os.makedirs(DOWNLOAD_DIR)
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -23,84 +21,93 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def compress_video(input_file, output_file):
     cmd = [
         "ffmpeg",
-        "-i",
-        input_file,
-        "-vcodec",
-        "libx264",
-        "-crf",
-        "28",
-        "-preset",
-        "fast",
-        output_file,
+        "-i", input_file,
+        "-vcodec", "libx264",
+        "-crf", "28",
+        "-preset", "fast",
+        "-acodec", "aac",
+        "-b:a", "128k",
+        output_file
     ]
-
     subprocess.run(cmd)
 
 
-async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    url = update.message.text
-
-    status = await update.message.reply_text("⏳ Memulai download...")
-
-    loop = asyncio.get_event_loop()
-
-    filename = await loop.run_in_executor(None, download_video, url)
-
-    await status.edit_text("📦 Memproses file...")
-
-    filesize = os.path.getsize(filename)
-
-    MAX_SIZE = 49 * 1024 * 1024
-
-    if filesize > MAX_SIZE:
-
-        compressed = filename + "_compressed.mp4"
-
-        compress_video(filename, compressed)
-
-        os.remove(filename)
-
-        filename = compressed
-
-    await status.edit_text("🚀 Upload ke Telegram...")
-
-    await update.message.reply_video(video=open(filename, "rb"))
-
-    os.remove(filename)
-
-    await status.delete()
-
-
-def download_video(url):
+def download_media(url):
 
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
         "outtmpl": f"{DOWNLOAD_DIR}/%(title)s.%(ext)s",
-        "noplaylist": True,
+        "merge_output_format": "mp4",
         "quiet": True,
+        "noplaylist": True,
+        "nocheckcertificate": True,
+        "ignoreerrors": True,
+        "geo_bypass": True,
+        "geo_bypass_country": "US",
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0"
+        },
+        "retries": 3,
+        "fragment_retries": 3
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        return ydl.prepare_filename(info)
+        filename = ydl.prepare_filename(info)
+
+        if not filename.endswith(".mp4"):
+            filename = filename.rsplit(".", 1)[0] + ".mp4"
+
+    return filename
 
 
-async def progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pass
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+    url = update.message.text
 
-async def error(update: object, context: ContextTypes.DEFAULT_TYPE):
-    print(context.error)
+    msg = await update.message.reply_text("⏳ Memulai download...")
+
+    try:
+        file_path = await asyncio.to_thread(download_media, url)
+
+        size = os.path.getsize(file_path) / (1024 * 1024)
+
+        # jika file terlalu besar untuk Telegram
+        if size > 45:
+
+            await msg.edit_text("📦 Mengompres video agar bisa dikirim...")
+
+            compressed = file_path.replace(".mp4", "_compressed.mp4")
+
+            await asyncio.to_thread(compress_video, file_path, compressed)
+
+            file_path = compressed
+
+        await msg.edit_text("📤 Mengirim video...")
+
+        with open(file_path, "rb") as video:
+            await update.message.reply_video(video)
+
+        os.remove(file_path)
+
+    except Exception as e:
+        await msg.edit_text(f"❌ Gagal: {e}")
 
 
 def main():
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
-    app.add_handler(
+    print("FastMedia Bot running...")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()    app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, download_media)
     )
 
