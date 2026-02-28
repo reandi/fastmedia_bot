@@ -14,7 +14,7 @@ queue = asyncio.Queue()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("FastMedia Bot aktif.\nKirim link video.")
+    await update.message.reply_text("🚀 FastMedia Bot aktif.\nKirim link video.")
 
 
 async def enqueue(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -24,7 +24,6 @@ async def enqueue(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def worker():
-
     while True:
 
         update, url = await queue.get()
@@ -36,46 +35,30 @@ async def worker():
 
         try:
 
-            await msg.edit_text("Downloading...")
-
             cmd = [
                 "yt-dlp",
                 "--no-playlist",
-                "--merge-output-format", "mp4",
-                "-f", "bv*+ba/b",
-                "--retries", "5",
-                "--fragment-retries", "5",
-                "--geo-bypass",
-                "--add-header", "User-Agent:Mozilla/5.0",
-                "-o", filepath,
-                url
+                "-f",
+                "bv*+ba/b",
+                "--merge-output-format",
+                "mp4",
+                "--retries",
+                "5",
+                "--fragment-retries",
+                "5",
+                "--add-header",
+                "User-Agent:Mozilla/5.0",
+                "-o",
+                filepath,
+                url,
             ]
 
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(cmd)
 
             if not os.path.exists(filepath):
                 await msg.edit_text("Download gagal.")
                 queue.task_done()
                 continue
-
-            await msg.edit_text("Compress video...")
-
-            compressed = f"{DOWNLOAD_DIR}/{uid}_c.mp4"
-
-            compress = [
-                "ffmpeg",
-                "-i", filepath,
-                "-vcodec", "libx264",
-                "-crf", "28",
-                "-preset", "fast",
-                "-acodec", "aac",
-                compressed
-            ]
-
-            subprocess.run(compress, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-            if os.path.exists(compressed):
-                filepath = compressed
 
             await msg.edit_text("Upload...")
 
@@ -88,10 +71,8 @@ async def worker():
             await update.message.reply_text("Terjadi error.")
 
         finally:
-            try:
+            if os.path.exists(filepath):
                 os.remove(filepath)
-            except:
-                pass
 
         queue.task_done()
 
@@ -101,6 +82,19 @@ async def start_worker(app):
 
 
 def main():
+
+    app = ApplicationBuilder().token(TOKEN).post_init(start_worker).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enqueue))
+
+    print("FastMedia Bot running...")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()def main():
 
     app = ApplicationBuilder().token(TOKEN).post_init(start_worker).build()
 
